@@ -1,0 +1,11 @@
+{
+  "name": "coala-wing",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Static Phaser pony bedroom demo",
+  "scripts": {
+    "dev": "npx serve .",
+    "start": "npx serve .",
+    "build": "node -e \"console.log('Static site: no build step required')\""
+  }
+}
