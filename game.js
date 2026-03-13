@@ -31,6 +31,8 @@ const HEART_LIFETIME_MS = 1000;
 const HEART_COOLDOWN_MS = 900;
 const GROUND_GRACE_MS = 120;
 const SLEEP_DURATION_MS = 6000;
+const SLEEP_LIFT_Y = 25;
+const WAKE_RESPAWN_ABOVE_BED_Y = 80;
 const BED_SLEEP_TOLERANCE = 18;
 let NEXT_CHARACTER_ID = 1;
 
@@ -156,6 +158,9 @@ class CharacterActor {
   alignFeetTo(feetY) {
     const bodyBottomFromTop = (this.sprite.body.offset.y + this.sprite.body.height) * this.sprite.scaleY;
     this.sprite.y = feetY - bodyBottomFromTop + this.sprite.displayHeight / 2;
+    if (this.sprite.body && typeof this.sprite.body.updateFromGameObject === "function") {
+      this.sprite.body.updateFromGameObject();
+    }
   }
 
   getBodyBottomWorld() {
@@ -273,7 +278,7 @@ class CharacterActor {
     this.sprite.setAngularVelocity(0);
     this.facing = "right";
     this.setSleepTexture();
-    this.alignFeetTo(supportY);
+    this.alignFeetTo(supportY - SLEEP_LIFT_Y);
     this.syncVisualToBody();
     this.startSleepEffect();
   }
@@ -284,9 +289,15 @@ class CharacterActor {
     this.sleepSupportY = null;
     this.sprite.body.allowGravity = true;
     this.sprite.body.moves = true;
+    this.sprite.setVelocity(0, 0);
     this.stopSleepEffect();
     this.setStandingTexture();
-    this.alignFeetTo(supportY);
+    if (supportY === BED_TOP_Y) {
+      this.alignFeetTo(BED_TOP_Y - WAKE_RESPAWN_ABOVE_BED_Y);
+    } else {
+      this.alignFeetTo(supportY);
+    }
+    this.lastGroundedAt = this.scene.time.now;
     this.syncVisualToBody();
     this.aiDecisionTimer = Phaser.Math.Between(AI_DECISION_MS_MIN, AI_DECISION_MS_MAX);
     this.aiSpeed = Phaser.Math.Between(AI_SPEED_MIN, AI_SPEED_MAX);
