@@ -8,12 +8,13 @@ const ACTIVE_AREA = {
 };
 
 const ACTIVE_BOTTOM_Y = ACTIVE_AREA.y + ACTIVE_AREA.height;
-const BED_COLLIDER_HEIGHT = 80;
+const BED_PLATFORM_HEIGHT = 6;
+const BED_TOP_Y = 410;
 const BED_SURFACE = {
   x: 673,
-  y: 450,
+  y: BED_TOP_Y + BED_PLATFORM_HEIGHT / 2,
   width: 1384,
-  height: BED_COLLIDER_HEIGHT,
+  height: BED_PLATFORM_HEIGHT,
 };
 
 const WALK_SPEED = 275;
@@ -29,11 +30,8 @@ const AI_JUMP_CHANCE = 0.25;
 const HEART_LIFETIME_MS = 1000;
 const HEART_COOLDOWN_MS = 900;
 const GROUND_GRACE_MS = 120;
-const LANDING_STAND_DISTANCE = 15;
 const SLEEP_DURATION_MS = 6000;
-const BED_TOP_Y = BED_SURFACE.y - BED_COLLIDER_HEIGHT / 2;
 const BED_SLEEP_TOLERANCE = 18;
-const FALL_THROUGH_SNAP_DISTANCE = 36;
 let NEXT_CHARACTER_ID = 1;
 
 const CHARACTER_TYPES = {
@@ -151,7 +149,7 @@ class CharacterActor {
     this.visual.setInteractive({ cursor: "pointer" });
     this.visual.on("pointerdown", () => scene.selectCharacter(this));
 
-    scene.physics.add.collider(this.sprite, scene.platforms);
+    scene.physics.add.collider(this.sprite, scene.bed);
     this.syncVisualToBody();
   }
 
@@ -232,8 +230,6 @@ class CharacterActor {
       }
     }
 
-    this.scene.preventFallThrough(this);
-
     const rawOnGround =
       this.sprite.body.onFloor() ||
       this.sprite.body.blocked.down ||
@@ -245,18 +241,13 @@ class CharacterActor {
     }
 
     this.onBed = this.scene.isCharacterOnBed(this);
-    this.onGround =
-      this.getBodyBottomWorld() >= ACTIVE_BOTTOM_Y - 2 &&
-      (rawOnGround || this.scene.time.now - this.lastGroundedAt <= GROUND_GRACE_MS) &&
-      !this.onBed;
+    this.onGround = rawOnGround && !this.onBed;
     this.onSupport = this.onGround || this.onBed;
 
     if (this.onSupport) {
       this.jumpsUsed = 0;
       this.landingPoseLocked = false;
     }
-
-    this.nearGround = this.scene.isCharacterNearGround(this, LANDING_STAND_DISTANCE);
 
     if (this.isSelected) {
       this.updateSelected(delta, cursors);
@@ -274,7 +265,7 @@ class CharacterActor {
     this.isSelected = false;
     this.state = "sleeping";
     this.sleepUntil = this.scene.time.now + SLEEP_DURATION_MS;
-    const supportY = this.scene.getCharacterSupportTop(this) ?? this.getBodyBottomWorld();
+    const supportY = this.onBed ? BED_TOP_Y : ACTIVE_BOTTOM_Y;
     this.sleepSupportY = supportY;
     this.sprite.setVelocity(0, 0);
     this.sprite.body.allowGravity = false;
@@ -289,7 +280,7 @@ class CharacterActor {
 
   wakeUp() {
     this.sleepUntil = 0;
-    const supportY = this.sleepSupportY ?? this.scene.getCharacterSupportTop(this) ?? ACTIVE_BOTTOM_Y;
+    const supportY = this.sleepSupportY ?? (this.onBed ? BED_TOP_Y : ACTIVE_BOTTOM_Y);
     this.sleepSupportY = null;
     this.sprite.body.allowGravity = true;
     this.sprite.body.moves = true;
@@ -356,13 +347,7 @@ class CharacterActor {
       this.setJumpTexture();
     }
 
-    if (!this.onSupport && this.sprite.body.velocity.y < 0) {
-      this.landingPoseLocked = false;
-      this.setJumpTexture();
-    } else if (!this.onSupport && (this.nearGround || this.landingPoseLocked)) {
-      this.landingPoseLocked = true;
-      this.setStandingTexture();
-    } else if (!this.onSupport) {
+    if (!this.onSupport) {
       this.setJumpTexture();
     }
   }
@@ -394,12 +379,6 @@ class CharacterActor {
 
     if (this.onSupport) {
       this.updateWalk(delta, Math.abs(this.sprite.body.velocity.x) > 0);
-    } else if (this.sprite.body.velocity.y < 0) {
-      this.landingPoseLocked = false;
-      this.setJumpTexture();
-    } else if (this.nearGround || this.landingPoseLocked) {
-      this.landingPoseLocked = true;
-      this.setStandingTexture();
     } else {
       this.setJumpTexture();
     }
@@ -504,6 +483,7 @@ class BedroomScene extends Phaser.Scene {
       0
     );
     this.physics.add.existing(bed, true);
+    this.bed = bed;
 
     this.platforms = this.physics.add.staticGroup();
     this.platforms.add(bed);
@@ -603,154 +583,26 @@ class BedroomScene extends Phaser.Scene {
     }
   }
 
-  getCandidateSupportTops(character) {
-    const spriteLeft = character.sprite.body.left;
-    const spriteRight = character.sprite.body.right;
-    const supports = [];
-
-    const considerSurface = (surfaceLeft, surfaceRight, surfaceTop) => {
-      const overlapsHorizontally = spriteRight > surfaceLeft && spriteLeft < surfaceRight;
-      if (!overlapsHorizontally) {
-        return;
-      }
-
-      supports.push(surfaceTop);
-    };
-
-    considerSurface(ACTIVE_AREA.x, ACTIVE_AREA.x + ACTIVE_AREA.width, ACTIVE_BOTTOM_Y);
-    considerSurface(
-      BED_SURFACE.x - BED_SURFACE.width / 2,
-      BED_SURFACE.x + BED_SURFACE.width / 2,
-      BED_SURFACE.y - BED_SURFACE.height / 2
-    );
-
-    this.characters.forEach((other) => {
-      if (other === character) {
-        return;
-      }
-
-      const otherBody = other.sprite.body;
-      const otherLeft = otherBody.left;
-      const otherRight = otherBody.right;
-      const otherTop = otherBody.top;
-      considerSurface(otherLeft, otherRight, otherTop);
-    });
-
-    return supports;
-  }
-
-  getCharacterSupportTop(character) {
-    const bodyBottom = character.getBodyBottomWorld();
-    const supports = this.getCandidateSupportTops(character)
-      .filter((surfaceTop) => surfaceTop >= bodyBottom - FALL_THROUGH_SNAP_DISTANCE)
-      .sort((a, b) => a - b);
-
-    return supports[0] ?? null;
-  }
-
-  isCharacterNearGround(character, threshold) {
+  isCharacterOnBed(character) {
     const body = character.sprite.body;
     if (!body) {
       return false;
     }
 
-    if (body.velocity.y < 0) {
-      return false;
-    }
-
-    const bodyBottom = character.getBodyBottomWorld();
-    let closestGap = Infinity;
-
-    this.getCandidateSupportTops(character).forEach((surfaceTop) => {
-      if (surfaceTop < bodyBottom) {
-        return;
-      }
-
-      closestGap = Math.min(closestGap, surfaceTop - bodyBottom);
-    });
-
-    return closestGap <= threshold;
-  }
-
-  preventFallThrough(character) {
-    const body = character.sprite.body;
-    if (!body || body.velocity.y < 0 || character.state === "sleeping") {
-      return;
-    }
-
-    const currentBottom = character.getBodyBottomWorld();
-    const previousBottom = character.lastBodyBottom ?? currentBottom;
-    const currentLeft = body.left;
-    const currentRight = body.right;
-    const overlapsBed =
-      currentRight > BED_SURFACE.x - BED_SURFACE.width / 2 &&
-      currentLeft < BED_SURFACE.x + BED_SURFACE.width / 2;
-    const bedBottomY = BED_SURFACE.y + BED_SURFACE.height / 2;
-
-    const crossedBedTop =
-      overlapsBed &&
-      previousBottom <= BED_TOP_Y + 2 &&
-      currentBottom >= BED_TOP_Y &&
-      currentBottom <= bedBottomY + FALL_THROUGH_SNAP_DISTANCE;
-
-    if (crossedBedTop) {
-      character.alignFeetTo(BED_TOP_Y);
-      body.setVelocityY(0);
-      character.lastGroundedAt = this.time.now;
-      character.onGround = true;
-      character.jumpsUsed = 0;
-      return;
-    }
-
-    const crossedBottomBoundary =
-      previousBottom <= ACTIVE_BOTTOM_Y + 2 &&
-      currentBottom >= ACTIVE_BOTTOM_Y &&
-      currentBottom <= ACTIVE_BOTTOM_Y + FALL_THROUGH_SNAP_DISTANCE;
-
-    if (crossedBottomBoundary) {
-      character.alignFeetTo(ACTIVE_BOTTOM_Y);
-      body.setVelocityY(0);
-      character.lastGroundedAt = this.time.now;
-      character.onGround = true;
-      character.jumpsUsed = 0;
-      return;
-    }
-
-    const supportTop = this.getCharacterSupportTop(character);
-
-    if (supportTop === null) {
-      return;
-    }
-
-    const crossedSurface =
-      previousBottom <= supportTop + 2 &&
-      currentBottom >= supportTop &&
-      currentBottom - supportTop <= FALL_THROUGH_SNAP_DISTANCE;
-
-    if (!crossedSurface) {
-      return;
-    }
-
-    character.alignFeetTo(supportTop);
-    body.setVelocityY(0);
-    character.lastGroundedAt = this.time.now;
-    character.onGround = true;
-    character.jumpsUsed = 0;
-  }
-
-  isCharacterOnBed(character) {
-    const body = character.sprite.body;
     const spriteLeft = body.left;
     const spriteRight = body.right;
     const bodyBottom = body.bottom;
     const overlapsBed =
       spriteRight > BED_SURFACE.x - BED_SURFACE.width / 2 &&
       spriteLeft < BED_SURFACE.x + BED_SURFACE.width / 2;
-    const withinBedVerticalBand =
-      bodyBottom >= BED_TOP_Y - BED_SLEEP_TOLERANCE &&
-      bodyBottom <= BED_SURFACE.y + BED_SURFACE.height / 2 + 2;
+    const withinBedVerticalBand = Math.abs(bodyBottom - BED_TOP_Y) <= BED_SLEEP_TOLERANCE;
+    const isSupported =
+      body.blocked.down ||
+      body.touching.down ||
+      body.wasTouching.down ||
+      body.onFloor();
 
-    return overlapsBed && withinBedVerticalBand;
+    return overlapsBed && withinBedVerticalBand && isSupported;
   }
 
   handleCharacterCollision(first, second) {
