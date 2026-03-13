@@ -6,6 +6,6 @@
   "scripts": {
     "dev": "npx serve .",
     "start": "npx serve .",
-    "build": "node -e \"console.log('Static site: no build step required')\""
+    "build": "rm -rf dist && mkdir -p dist/public && cp index.html game.js dist/ && cp -R public/assets dist/public/assets"
   }
 }
