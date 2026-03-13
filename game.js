@@ -10,6 +10,7 @@ const ACTIVE_AREA = {
 const ACTIVE_BOTTOM_Y = ACTIVE_AREA.y + ACTIVE_AREA.height;
 const BED_PLATFORM_HEIGHT = 6;
 const BED_TOP_Y = 410;
+const DEBUG_MODE = new URLSearchParams(window.location.search).get("debug") === "true";
 const BED_SURFACE = {
   x: 673,
   y: BED_TOP_Y + BED_PLATFORM_HEIGHT / 2,
@@ -20,7 +21,7 @@ const BED_SURFACE = {
 const WALK_SPEED = 275;
 const JUMP_SPEED = 1047;
 const WALK_FRAME_MS = 180;
-const SHOW_DEBUG_LINE = true;
+const SHOW_DEBUG_LINE = DEBUG_MODE;
 const DOUBLE_JUMP_COUNT = 2;
 const AI_SPEED_MIN = 80;
 const AI_SPEED_MAX = 170;
@@ -560,7 +561,8 @@ class BedroomScene extends Phaser.Scene {
         padding: { x: 12, y: 10 },
       })
       .setDepth(20)
-      .setScrollFactor(0);
+      .setScrollFactor(0)
+      .setVisible(DEBUG_MODE);
 
     this.selectionMarker = this.add
       .text(0, 0, "⭐", {
@@ -722,6 +724,10 @@ class BedroomScene extends Phaser.Scene {
   }
 
   updateDebugPanel() {
+    if (!DEBUG_MODE) {
+      return;
+    }
+
     if (!this.selectedCharacter) {
       this.debugPanel.setText("No active sprite");
       return;
@@ -779,7 +785,7 @@ const config = {
     default: "arcade",
     arcade: {
       gravity: { y: 1800 },
-      debug: true,
+      debug: DEBUG_MODE,
     },
   },
   scale: {
