@@ -10,7 +10,9 @@ const ACTIVE_AREA = {
 const ACTIVE_BOTTOM_Y = ACTIVE_AREA.y + ACTIVE_AREA.height;
 const BED_PLATFORM_HEIGHT = 6;
 const BED_TOP_Y = 410;
-const DEBUG_MODE = new URLSearchParams(window.location.search).get("debug") === "true";
+const URL_PARAMS = new URLSearchParams(window.location.search);
+const DEBUG_MODE = URL_PARAMS.get("debug") === "true";
+const CURRENT_LEVEL = Number(URL_PARAMS.get("level") ?? 1);
 const BED_SURFACE = {
   x: 673,
   y: BED_TOP_Y + BED_PLATFORM_HEIGHT / 2,
@@ -28,13 +30,16 @@ const AI_SPEED_MAX = 170;
 const AI_DECISION_MS_MIN = 900;
 const AI_DECISION_MS_MAX = 2400;
 const AI_JUMP_CHANCE = 0.25;
+const AI_SLEEP_CHANCE_ON_BED = 0.2;
 const HEART_LIFETIME_MS = 1000;
 const HEART_COOLDOWN_MS = 900;
 const GROUND_GRACE_MS = 120;
 const SLEEP_DURATION_MS = 6000;
+const AI_SLEEP_DURATION_MS = 3000;
 const SLEEP_LIFT_Y = 25;
 const WAKE_RESPAWN_ABOVE_BED_Y = 80;
 const BED_SLEEP_TOLERANCE = 18;
+const GUBBSTRUTT_DELAY_MS = 25000;
 let NEXT_CHARACTER_ID = 1;
 
 const CHARACTER_TYPES = {
@@ -42,6 +47,7 @@ const CHARACTER_TYPES = {
     scale: 0.27,
     bodySize: { width: 0.32, height: 0.18 },
     bodyOffset: { x: 0.34, y: 0.78 },
+    sleepSfxKey: "pony-zzz",
     textures: {
       stand: { left: "pony-stand-left", right: "pony-stand-right" },
       walk: { left: "pony-walk-left", right: "pony-walk-right" },
@@ -53,6 +59,7 @@ const CHARACTER_TYPES = {
     scale: 0.36,
     bodySize: { width: 0.42, height: 0.16 },
     bodyOffset: { x: 0.29, y: 0.82 },
+    sleepSfxKey: "brum-zzz",
     textures: {
       stand: { left: "brum-stand-left", right: "brum-stand-right" },
       walk: { left: "brum-walk-left", right: "brum-walk-right" },
@@ -64,6 +71,7 @@ const CHARACTER_TYPES = {
     scale: 0.34,
     bodySize: { width: 0.42, height: 0.18 },
     bodyOffset: { x: 0.29, y: 0.76 },
+    sleepSfxKey: "penguin-zzz",
     textures: {
       stand: {
         left: "penguin-stand-left",
@@ -87,6 +95,7 @@ const CHARACTER_TYPES = {
     scale: 0.34,
     bodySize: { width: 0.38, height: 0.18 },
     bodyOffset: { x: 0.31, y: 0.78 },
+    sleepSfxKey: "agnes-zzz",
     textures: {
       stand: {
         left: "agnes-stand-left",
@@ -127,6 +136,7 @@ class CharacterActor {
     this.lastBodyBottom = null;
     this.sleepUntil = 0;
     this.sleepEmitter = null;
+    this.sleepSound = null;
     this.sleepSupportY = null;
     this.aiDirection = config.facing === "left" ? -1 : 1;
     this.aiSpeed = Phaser.Math.Between(AI_SPEED_MIN, AI_SPEED_MAX);
@@ -267,10 +277,10 @@ class CharacterActor {
     this.syncVisualToBody();
   }
 
-  enterSleep() {
+  enterSleep(durationMs = SLEEP_DURATION_MS) {
     this.isSelected = false;
     this.state = "sleeping";
-    this.sleepUntil = this.scene.time.now + SLEEP_DURATION_MS;
+    this.sleepUntil = this.scene.time.now + durationMs;
     const supportY = this.onBed ? BED_TOP_Y : ACTIVE_BOTTOM_Y;
     this.sleepSupportY = supportY;
     this.sprite.setVelocity(0, 0);
@@ -306,6 +316,7 @@ class CharacterActor {
 
   startSleepEffect() {
     this.stopSleepEffect();
+    this.startSleepSound();
     this.scene.spawnSleepText(
       this.visual.x + this.visual.displayWidth * 0.18,
       this.visual.y - this.visual.displayHeight * 0.55
@@ -327,12 +338,38 @@ class CharacterActor {
   }
 
   stopSleepEffect() {
+    this.stopSleepSound();
+
     if (!this.sleepEmitter) {
       return;
     }
 
     this.sleepEmitter.remove(false);
     this.sleepEmitter = null;
+  }
+
+  startSleepSound() {
+    const soundKey = this.definition.sleepSfxKey;
+    if (!soundKey || !this.scene.cache.audio.exists(soundKey)) {
+      return;
+    }
+
+    this.stopSleepSound();
+    this.sleepSound = this.scene.sound.add(soundKey, {
+      loop: true,
+      volume: 0.45,
+    });
+    this.sleepSound.play();
+  }
+
+  stopSleepSound() {
+    if (!this.sleepSound) {
+      return;
+    }
+
+    this.sleepSound.stop();
+    this.sleepSound.destroy();
+    this.sleepSound = null;
   }
 
   updateSelected(delta, cursors) {
@@ -377,6 +414,11 @@ class CharacterActor {
       this.aiDirection = Math.random() < 0.5 ? -1 : 1;
       this.aiSpeed = Phaser.Math.Between(AI_SPEED_MIN, AI_SPEED_MAX);
       this.aiDecisionTimer = Phaser.Math.Between(AI_DECISION_MS_MIN, AI_DECISION_MS_MAX);
+
+      if (this.onBed && Math.random() < AI_SLEEP_CHANCE_ON_BED) {
+        this.enterSleep(AI_SLEEP_DURATION_MS);
+        return;
+      }
 
       if (this.onSupport && Math.random() < AI_JUMP_CHANCE) {
         this.sprite.setVelocityY(-JUMP_SPEED);
@@ -453,6 +495,7 @@ class BedroomScene extends Phaser.Scene {
 
   preload() {
     this.load.image("bedroom", "public/assets/backgrounds/bedroom.png");
+    this.load.image("gubbstrutt", "public/assets/gubbstrutt/gubbstrutt.png");
     this.load.image("pony-stand-right", "public/assets/sprites/pony/pony-standing-right.png");
     this.load.image("pony-walk-right", "public/assets/sprites/pony/pony-walk-right.png");
     this.load.image("pony-jump-right", "public/assets/sprites/pony/pony-jump-right.png");
@@ -460,6 +503,7 @@ class BedroomScene extends Phaser.Scene {
     this.load.image("pony-walk-left", "public/assets/sprites/pony/pony-walk-left.png");
     this.load.image("pony-jump-left", "public/assets/sprites/pony/pony-jump-left.png");
     this.load.image("pony-sleep", "public/assets/sprites/pony/pony-sleep.png");
+    this.load.audio("pony-zzz", "public/assets/sfx/pony/zzz.mp3");
     this.load.image("brum-stand-right", "public/assets/sprites/brum/brum-standing-right.png");
     this.load.image("brum-walk-right", "public/assets/sprites/brum/brum-walk-right.png");
     this.load.image("brum-jump-right", "public/assets/sprites/brum/brum-jump-right.png");
@@ -467,16 +511,22 @@ class BedroomScene extends Phaser.Scene {
     this.load.image("brum-walk-left", "public/assets/sprites/brum/brum-walk-left.png");
     this.load.image("brum-jump-left", "public/assets/sprites/brum/brum-jump-left.png");
     this.load.image("brum-sleep", "public/assets/sprites/brum/brum-sleep.png");
+    this.load.audio("brum-zzz", "public/assets/sfx/brum/zzz.mp3");
     this.load.image("penguin-stand-left", "public/assets/sprites/penguin/penguin-standing-left.png");
     this.load.image("penguin-walk-right", "public/assets/sprites/penguin/penguin-walk-right.png");
     this.load.image("penguin-jump-left", "public/assets/sprites/penguin/penguin-jump-left.png");
     this.load.image("penguin-walk-left", "public/assets/sprites/penguin/penguin-walk-left.png");
     this.load.image("penguin-sleep", "public/assets/sprites/penguin/penguin-sleep.png");
+    this.load.audio("penguin-zzz", [
+      "public/assets/sfx/penguin/zzz.mp3",
+      "public/assets/sfx/penguin/zzz.m4a",
+    ]);
     this.load.image("agnes-stand-left", "public/assets/sprites/agnes/agnes-standing-left.png");
     this.load.image("agnes-stand-right", "public/assets/sprites/agnes/agnes-standing-right.png");
     this.load.image("agnes-walk-right", "public/assets/sprites/agnes/agnes-walk-right.png");
     this.load.image("agnes-jump-left", "public/assets/sprites/agnes/agnes-jump-left.png");
     this.load.image("agnes-sleep", "public/assets/sprites/agnes/agnes-sleep.png");
+    this.load.audio("agnes-zzz", "public/assets/sfx/agnes/zzz.mp3");
   }
 
   create() {
@@ -582,6 +632,21 @@ class BedroomScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(41)
       .setVisible(false);
+    this.hasWon = false;
+    this.gubbstrutt = null;
+    this.input.keyboard.on("keydown", () => {
+      if (!this.hasWon) {
+        return;
+      }
+
+      this.scene.restart();
+    });
+
+    if (CURRENT_LEVEL === 5) {
+      this.time.delayedCall(GUBBSTRUTT_DELAY_MS, () => {
+        this.spawnGubbstrutt();
+      });
+    }
   }
 
   setupCharacterCollisions() {
@@ -682,6 +747,18 @@ class BedroomScene extends Phaser.Scene {
     });
   }
 
+  spawnGubbstrutt() {
+    if (this.gubbstrutt) {
+      return;
+    }
+
+    this.gubbstrutt = this.add
+      .image(GAME_WIDTH - 180, ACTIVE_BOTTOM_Y - 40, "gubbstrutt")
+      .setOrigin(0.5, 1)
+      .setDepth(18)
+      .setScale(0.32);
+  }
+
   selectCharacter(nextSelected) {
     this.characters.forEach((character) => {
       character.setSelected(character === nextSelected);
@@ -691,6 +768,10 @@ class BedroomScene extends Phaser.Scene {
   }
 
   update(_time, delta) {
+    if (this.hasWon) {
+      return;
+    }
+
     if (
       Phaser.Input.Keyboard.JustDown(this.sleepKey) &&
       this.selectedCharacter &&
@@ -747,6 +828,12 @@ class BedroomScene extends Phaser.Scene {
   }
 
   updateWinState() {
+    if (this.hasWon) {
+      this.winBox.setVisible(true);
+      this.winText.setVisible(true);
+      return;
+    }
+
     const hasWon = this.characters.every((character) => character.state === "sleeping");
 
     if (!hasWon) {
@@ -754,6 +841,9 @@ class BedroomScene extends Phaser.Scene {
       this.winText.setVisible(false);
       return;
     }
+
+    this.hasWon = true;
+    this.physics.pause();
 
     const paddingX = 28;
     const paddingY = 20;
